@@ -1,6 +1,6 @@
 #include "newalgo.h"
 #include "nblas.h"
-#include<immintrin.h>
+#include "simd.h"
 
 #define NEARZERO 1e-30
    
@@ -7118,7 +7118,7 @@
         }
 #elif defined (MDIM_VEC_UR4_MASK_NOSYNC)
 /*
- * 
+ * using simd.h ... to generalize  
  */
    vector<VALUETYPE> newalgo::EfficientVersionMdim(INDEXTYPE ITERATIONS, 
          INDEXTYPE NUMOFTHREADS, INDEXTYPE BATCHSIZE)
@@ -7127,34 +7127,25 @@
       VALUETYPE start, end, ENERGY, ENERGY0, *pb_X, *pb_Y;
       VALUETYPE STEP = 1.0;
       VALUETYPE *sumX, *sumY;
-      
-      
+       
       vector<VALUETYPE> result;
       pb_X = static_cast<VALUETYPE *> (::operator new (sizeof(VALUETYPE[BATCHSIZE])));
       pb_Y = static_cast<VALUETYPE *> (::operator new (sizeof(VALUETYPE[BATCHSIZE])));
       ENERGY0 = ENERGY = numeric_limits<VALUETYPE>::max();
 
 /*
- *    NOTE: we have different version of reciprocals... I'm defining it here
- *                   NOTE: rcp14_pd inst... precision 2^-14
- *                   rcp28_pd has relative error 2^-28 ... rounding??? 
- *                   NOTE: reciprocal is highly error prone for over/underflow
- */
-      #define MM512_RCP_PD(VD_) VD_ = _mm512_rcp14_pd(VD_)  // rcp28 -- AVX512ER 
-      #define MM512_MASKZ_RCP_PD(K_, VD_) VD_ = _mm512_maskz_rcp14_pd(K_, VD_)  
-/*
  *    NOTE: to avoid overflow the stack, we allocate memory in heap to 
  *    manage reduction .... 
  *    FIXME: possible to combine it with pb_X and pb_Y???? 
  *           size = NUMOFTHREADS * UNROLL * VLEN
  *    solved the stack overflow by this way 
- *    FIXME: VLEN depends on VALUETYPE... following only works for double as 
  *    a test case 
  */
+      #define UR 4  /* unroll factor = 4 */
       sumX = static_cast<VALUETYPE *> 
-               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*4*8])));
+               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*UR*VLEN])));
       sumY = static_cast<VALUETYPE *> 
-               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*4*8])));
+               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*UR*VLEN])));
 
       omp_set_num_threads(NUMOFTHREADS);
 /*
@@ -7179,8 +7170,8 @@
             {
 	       int ind = i-b*BATCHSIZE;
                int m, n, k;
-               register __m512d vx0, vx1, vx2, vx3;
-               register __m512d vy0, vy1, vy2, vy3;
+               register VTYPE vx0, vx1, vx2, vx3;
+               register VTYPE vy0, vy1, vy2, vy3;
 /*
  *             to minimize critical section, we are using extra memory here
  *             FIXME: use intrinsic to optimize it, like: XoR  
@@ -7188,15 +7179,15 @@
                for (m=0; m < NUMOFTHREADS*4*8; m++)
                   sumX[m] = sumY[m] = 0.0;
 
-	       vx0 = _mm512_loadu_pd(blasX + i);
-	       vx1 = _mm512_loadu_pd(blasX + i+8);
-	       vx2 = _mm512_loadu_pd(blasX + i+2*8);
-	       vx3 = _mm512_loadu_pd(blasX + i+3*8);
+	       BCL_vldu(vx0, blasX + i);
+	       BCL_vldu(vx1, blasX + i+8);
+	       BCL_vldu(vx2, blasX + i+2*8);
+	       BCL_vldu(vx3, blasX + i+3*8);
 
-	       vy0 = _mm512_loadu_pd(blasY + i);
-	       vy1 = _mm512_loadu_pd(blasY + i+1*8);
-	       vy2 = _mm512_loadu_pd(blasY + i+2*8);
-	       vy3 = _mm512_loadu_pd(blasY + i+3*8);
+	       BCL_vldu(vy0, blasY + i);
+	       BCL_vldu(vy1, blasY + i+1*8);
+	       BCL_vldu(vy2, blasY + i+2*8);
+	       BCL_vldu(vy3, blasY + i+3*8);
 /*
  *             starting of parallel region 
  */
@@ -7205,22 +7196,22 @@
                   int id, nthreads; 
                   int chunksize;
                   int j; 
-                  __m512d vdx0, vdx1, vdx2, vdx3;
-                  __m512d vdy0, vdy1, vdy2, vdy3;
-                  __m512d vd0, vd1, vd2, vd3;
+                  VTYPE vdx0, vdx1, vdx2, vdx3;
+                  VTYPE vdy0, vdy1, vdy2, vdy3;
+                  VTYPE vd0, vd1, vd2, vd3;
                   
-                  __m512d vtfx0, vtfx1, vtfx2, vtfx3;
-                  __m512d vtfy0, vtfy1, vtfy2, vtfy3;
+                  VTYPE vtfx0, vtfx1, vtfx2, vtfx3;
+                  VTYPE vtfy0, vtfy1, vtfy2, vtfy3;
 
                   const int M = graph.rows; 
                   id = omp_get_thread_num();
                   nthreads = omp_get_num_threads();
                   
                   // init temp sum 
-		  vtfx0 = _mm512_set1_pd(0.0); vtfy0 = _mm512_set1_pd(0.0);
-		  vtfx1 = _mm512_set1_pd(0.0); vtfy1 = _mm512_set1_pd(0.0);
-		  vtfx2 = _mm512_set1_pd(0.0); vtfy2 = _mm512_set1_pd(0.0);
-		  vtfx3 = _mm512_set1_pd(0.0); vtfy3 = _mm512_set1_pd(0.0);
+		  BCL_vzero(vtfx0); BCL_vzero(vtfy0);
+		  BCL_vzero(vtfx1); BCL_vzero(vtfy1);
+		  BCL_vzero(vtfx2); BCL_vzero(vtfy2);
+		  BCL_vzero(vtfx3); BCL_vzero(vtfy3);
 /*
  *                j is up to i... lower up case  
  */
@@ -7229,63 +7220,63 @@
                   for(j = id*chunksize; j < (id+1)*chunksize; j++)
                   {
                      int n = j-i;
-                     double xj = blasX[j];
-                     register __m512d vxj = _mm512_set1_pd(xj);
-                     double yj = blasY[j];
-                     register __m512d vyj = _mm512_set1_pd(yj);
-                        
+                     register VTYPE vxj; 
+                     register VTYPE vyj;
                      unsigned int ik0, ik1, ik2, ik3; 
                      __mmask8 k0, k1, k2, k3; 
 		  
+                     BCL_vbcast(vxj, blasX+j);
+                     BCL_vbcast(vyj, blasY+j);
+                     
                      ik0 = ( n >= 0 && n < 8 ) ? (255 & (~(1 << (n%8))))  : 255; 
                      ik1 = ( n >=8 && n < 8+8 )? (255 & ~(1 << n%8))  : 255; 
                      ik2 = ( n >=2*8 && n < 2*8+8 )? (255 & ~(1 << n%8))  : 255; 
                      ik3 = ( n >=3*8 && n < 3*8+8 )? (255 & ~(1 << n%8))  : 255; 
                      
                      //dx0 = xj - x0;
-		     vdx0 = _mm512_sub_pd(vxj, vx0);
-		     vdx1 = _mm512_sub_pd(vxj, vx1);
-		     vdx2 = _mm512_sub_pd(vxj, vx2);
-		     vdx3 = _mm512_sub_pd(vxj, vx3);
+		     BCL_vsub(vdx0, vxj, vx0);
+		     BCL_vsub(vdx1, vxj, vx1);
+		     BCL_vsub(vdx2, vxj, vx2);
+		     BCL_vsub(vdx3, vxj, vx3);
 	          
                      // dy0 = yj - y0;
-		     vdy0 = _mm512_sub_pd(vyj, vy0);
-		     vdy1 = _mm512_sub_pd(vyj, vy1);
-		     vdy2 = _mm512_sub_pd(vyj, vy2);
-		     vdy3 = _mm512_sub_pd(vyj, vy3);
+		     BCL_vsub(vdy0, vyj, vy0);
+		     BCL_vsub(vdy1, vyj, vy1);
+		     BCL_vsub(vdy2, vyj, vy2);
+		     BCL_vsub(vdy3, vyj, vy3);
 	             
                      //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
-		     vd0 = _mm512_mul_pd(vdx0, vdx0);
-		     vd1 = _mm512_mul_pd(vdx1, vdx1);
-		     vd2 = _mm512_mul_pd(vdx2, vdx2);
-		     vd3 = _mm512_mul_pd(vdx3, vdx3);
+		     BCL_vmul(vd0, vdx0, vdx0);
+		     BCL_vmul(vd1, vdx1, vdx1);
+		     BCL_vmul(vd2, vdx2, vdx2);
+		     BCL_vmul(vd3, vdx3, vdx3);
                      
-                     vd0 = _mm512_fmadd_pd(vdy0, vdy0, vd0);
-                     vd1 = _mm512_fmadd_pd(vdy1, vdy1, vd1);
-                     vd2 = _mm512_fmadd_pd(vdy2, vdy2, vd2);
-                     vd3 = _mm512_fmadd_pd(vdy3, vdy3, vd3);
+                     BCL_vmac(vd0, vdy0, vdy0, vd0);
+                     BCL_vmac(vd1, vdy1, vdy1, vd1);
+                     BCL_vmac(vd2, vdy2, vdy2, vd2);
+                     BCL_vmac(vd3, vdy3, vdy3, vd3);
                      
-                     k0 = _cvtu32_mask8(ik0);
-                     k1 = _cvtu32_mask8(ik1);
-                     k2 = _cvtu32_mask8(ik2);
-                     k3 = _cvtu32_mask8(ik3);
+                     BCL_cvtint2mask(k0, ik0);
+                     BCL_cvtint2mask(k1, ik1);
+                     BCL_cvtint2mask(k2, ik2);
+                     BCL_cvtint2mask(k3, ik3);
                      
-                     MM512_MASKZ_RCP_PD(k0, vd0);
-                     MM512_MASKZ_RCP_PD(k1, vd1);
-                     MM512_MASKZ_RCP_PD(k2, vd2);
-                     MM512_MASKZ_RCP_PD(k3, vd3);
+                     BCL_maskz_vrcp(k0, vd0);
+                     BCL_maskz_vrcp(k1, vd1);
+                     BCL_maskz_vrcp(k2, vd2);
+                     BCL_maskz_vrcp(k3, vd3);
                   
                      //tfx0 += dx0 * d0;
-                     vtfx0 = _mm512_fmadd_pd(vdx0, vd0, vtfx0);
-                     vtfx1 = _mm512_fmadd_pd(vdx1, vd1, vtfx1);
-                     vtfx2 = _mm512_fmadd_pd(vdx2, vd2, vtfx2);
-                     vtfx3 = _mm512_fmadd_pd(vdx3, vd3, vtfx3);
+                     BCL_vmac(vtfx0, vdx0, vd0);
+                     BCL_vmac(vtfx1, vdx1, vd1);
+                     BCL_vmac(vtfx2, vdx2, vd2);
+                     BCL_vmac(vtfx3, vdx3, vd3);
 
                      //tfy0 += dy0 * d0;
-                     vtfy0 = _mm512_fmadd_pd(vdy0, vd0, vtfy0);
-                     vtfy1 = _mm512_fmadd_pd(vdy1, vd1, vtfy1);
-                     vtfy2 = _mm512_fmadd_pd(vdy2, vd2, vtfy2);
-                     vtfy3 = _mm512_fmadd_pd(vdy3, vd3, vtfy3);
+                     BCL_vmac(vtfy0, vdy0, vd0);
+                     BCL_vmac(vtfy1, vdy1, vd1);
+                     BCL_vmac(vtfy2, vdy2, vd2);
+                     BCL_vmac(vtfy3, vdy3, vd3);
                   }
 /*
  *                cleanup 
@@ -7295,104 +7286,104 @@
                      for (j=nthreads*chunksize; j < M; j++)
                      {
                         int n = j-i;
-                        double xj = blasX[j];
-                        register __m512d vxj = _mm512_set1_pd(xj);
-                        double yj = blasY[j];
-                        register __m512d vyj = _mm512_set1_pd(yj);
+                        register VTYPE vxj;
+                        register VTYPE vyj;
                         unsigned int ik0, ik1, ik2, ik3; 
                         __mmask8 k0, k1, k2, k3; 
-		  
+		 
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
                         ik0 = ( n >= 0 && n < 8 ) ? (255 & (~(1 << (n%8))))  : 255; 
                         ik1 = ( n >=8 && n < 8+8 )? (255 & ~(1 << n%8))  : 255; 
                         ik2 = ( n >=2*8 && n < 2*8+8 )? (255 & ~(1 << n%8))  : 255; 
                         ik3 = ( n >=3*8 && n < 3*8+8 )? (255 & ~(1 << n%8))  : 255; 
 		  
                         //dx0 = xj - x0;
-		        vdx0 = _mm512_sub_pd(vxj, vx0);
-		        vdx1 = _mm512_sub_pd(vxj, vx1);
-		        vdx2 = _mm512_sub_pd(vxj, vx2);
-		        vdx3 = _mm512_sub_pd(vxj, vx3);
+		        BCL_vsub(vdx0, vxj, vx0);
+		        BCL_vsub(vdx1, vxj, vx1);
+		        BCL_vsub(vdx2, vxj, vx2);
+		        BCL_vsub(vdx3, vxj, vx3);
 	          
                         // dy0 = yj - y0;
-		        vdy0 = _mm512_sub_pd(vyj, vy0);
-		        vdy1 = _mm512_sub_pd(vyj, vy1);
-		        vdy2 = _mm512_sub_pd(vyj, vy2);
-		        vdy3 = _mm512_sub_pd(vyj, vy3);
+		        BCL_vsub(vdy0, vyj, vy0);
+		        BCL_vsub(vdy1, vyj, vy1);
+		        BCL_vsub(vdy2, vyj, vy2);
+		        BCL_vsub(vdy3, vyj, vy3);
 	             
                         //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
-		        vd0 = _mm512_mul_pd(vdx0, vdx0);
-		        vd1 = _mm512_mul_pd(vdx1, vdx1);
-		        vd2 = _mm512_mul_pd(vdx2, vdx2);
-		        vd3 = _mm512_mul_pd(vdx3, vdx3);
+		        BCL_vmul(vd0, vdx0, vdx0);
+		        BCL_vmul(vd1, vdx1, vdx1);
+		        BCL_vmul(vd2, vdx2, vdx2);
+		        BCL_vmul(vd3, vdx3, vdx3);
                         
-                        vd0 = _mm512_fmadd_pd(vdy0, vdy0, vd0);
-                        vd1 = _mm512_fmadd_pd(vdy1, vdy1, vd1);
-                        vd2 = _mm512_fmadd_pd(vdy2, vdy2, vd2);
-                        vd3 = _mm512_fmadd_pd(vdy3, vdy3, vd3);
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        BCL_vmac(vd1, vdy1, vdy1);
+                        BCL_vmac(vd2, vdy2, vdy2);
+                        BCL_vmac(vd3, vdy3, vdy3);
                      
-                        k0 = _cvtu32_mask8(ik0);
-                        k1 = _cvtu32_mask8(ik1);
-                        k2 = _cvtu32_mask8(ik2);
-                        k3 = _cvtu32_mask8(ik3);
+                        BCL_cvtint2mask(k0, ik0);
+                        BCL_cvtint2mask(k1, ik1);
+                        BCL_cvtint2mask(k2, ik2);
+                        BCL_cvtint2mask(k3, ik3);
                         
-                        MM512_MASKZ_RCP_PD(k0, vd0); 
-                        MM512_MASKZ_RCP_PD(k1, vd1); 
-                        MM512_MASKZ_RCP_PD(k2, vd2); 
-                        MM512_MASKZ_RCP_PD(k3, vd3); 
+                        BCL_maskz_vrcp(k0, vd0); 
+                        BCL_maskz_vrcp(k1, vd1); 
+                        BCL_maskz_vrcp(k2, vd2); 
+                        BCL_maskz_vrcp(k3, vd3); 
 		     
                         //tfx0 += dx0 * d0;
-                        vtfx0 = _mm512_fmadd_pd(vdx0, vd0, vtfx0);
-                        vtfx1 = _mm512_fmadd_pd(vdx1, vd1, vtfx1);
-                        vtfx2 = _mm512_fmadd_pd(vdx2, vd2, vtfx2);
-                        vtfx3 = _mm512_fmadd_pd(vdx3, vd3, vtfx3);
+                        BCL_vmac(vtfx0, vdx0, vd0);
+                        BCL_vmac(vtfx1, vdx1, vd1);
+                        BCL_vmac(vtfx2, vdx2, vd2);
+                        BCL_vmac(vtfx3, vdx3, vd3);
 
                         //tfy0 += dy0 * d0;
-                        vtfy0 = _mm512_fmadd_pd(vdy0, vd0, vtfy0);
-                        vtfy1 = _mm512_fmadd_pd(vdy1, vd1, vtfy1);
-                        vtfy2 = _mm512_fmadd_pd(vdy2, vd2, vtfy2);
-                        vtfy3 = _mm512_fmadd_pd(vdy3, vd3, vtfy3);
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                        BCL_vmac(vtfy1, vdy1, vd1);
+                        BCL_vmac(vtfy2, vdy2, vd2);
+                        BCL_vmac(vtfy3, vdy3, vd3);
                      }
                   }
 /*
  *                Reduction without synchronization  
  */
                   {
-                     register __m512d tv; 
+                     register VTYPE tv; 
                      double *ptr = sumX + id*32;
                      
-                     tv = _mm512_loadu_pd(ptr);
-                     vtfx0 = _mm512_add_pd(vtfx0, tv);
-                     _mm512_storeu_pd(ptr, vtfx0);
+                     BCL_vldu(tv, ptr);
+                     BCL_vadd(vtfx0, vtfx0, tv);
+                     BCL_vstore(ptr, vtfx0);
                      
-                     tv = _mm512_loadu_pd(ptr+1*8);
-                     vtfx1 = _mm512_add_pd(vtfx1, tv);
-                     _mm512_storeu_pd(ptr+1*8, vtfx1);
+                     BCL_vldu(tv, ptr+1*8);
+                     BCL_vadd(vtfx1, vtfx1, tv);
+                     BCL_vstore(ptr+1*8, vtfx1);
                      
-                     tv = _mm512_loadu_pd(ptr+2*8);
-                     vtfx2 = _mm512_add_pd(vtfx2, tv);
-                     _mm512_storeu_pd(ptr+2*8, vtfx2);
+                     BCL_vldu(tv, ptr+2*8);
+                     BCL_vadd(vtfx2, vtfx2, tv);
+                     BCL_vstore(ptr+2*8, vtfx2);
 
-                     tv = _mm512_loadu_pd(ptr+3*8);
-                     vtfx3 = _mm512_add_pd(vtfx3, tv);
-                     _mm512_storeu_pd(ptr+3*8, vtfx3);
+                     BCL_vldu(tv, ptr+3*8);
+                     BCL_vadd(vtfx3, vtfx3, tv);
+                     BCL_vstore(ptr+3*8, vtfx3);
                      
                      //fy1 += tfy1; 
                      ptr = (double*) sumY + id*32;
-                     tv = _mm512_loadu_pd(ptr);
-                     vtfy0 = _mm512_add_pd(vtfy0, tv);
-                     _mm512_storeu_pd(ptr, vtfy0);
+                     BCL_vldu(tv, ptr);
+                     BCL_vadd(vtfy0, vtfy0, tv);
+                     BCL_vstore(ptr, vtfy0);
                      
-                     tv = _mm512_loadu_pd(ptr+1*8);
-                     vtfy1 = _mm512_add_pd(vtfy1, tv);
-                     _mm512_storeu_pd(ptr+1*8, vtfy1);
+                     BCL_vldu(tv, ptr+1*8);
+                     BCL_vadd(vtfy1, vtfy1, tv);
+                     BCL_vstore(ptr+1*8, vtfy1);
                      
-                     tv = _mm512_loadu_pd(ptr+2*8);
-                     vtfy2 = _mm512_add_pd(vtfy2, tv);
-                     _mm512_storeu_pd(ptr+2*8, vtfy2);
+                     BCL_vldu(tv, ptr+2*8);
+                     BCL_vadd(vtfy2, vtfy2, tv);
+                     BCL_vstore(ptr+2*8, vtfy2);
 
-                     tv = _mm512_loadu_pd(ptr+3*8);
-                     vtfy3 = _mm512_add_pd(vtfy3, tv);
-                     _mm512_storeu_pd(ptr+3*8, vtfy3);
+                     BCL_vldu(tv, ptr+3*8);
+                     BCL_vadd(vtfy3, vtfy3, tv);
+                     BCL_vstore(ptr+3*8, vtfy3);
                   }
                }
 /*
@@ -7413,34 +7404,34 @@
 
 
                double *ptr = &sumX[0]; 
-               __m512d tvsum;
+               VTYPE tvsum;
                
                
-               tvsum = _mm512_loadu_pd(ptr);
-               _mm512_storeu_pd(pb_X+ind, tvsum); 
+               BCL_vldu(tvsum, ptr);
+               BCL_vstore(pb_X+ind, tvsum); 
                
-               tvsum = _mm512_loadu_pd(ptr+1*8);
-               _mm512_storeu_pd(pb_X+ind+8, tvsum); 
+               BCL_vldu(tvsum, ptr+1*8);
+               BCL_vstore(pb_X+ind+8, tvsum); 
                
-               tvsum = _mm512_loadu_pd(ptr+2*8);
-               _mm512_storeu_pd(pb_X+ind+2*8, tvsum);
+               BCL_vldu(tvsum, ptr+2*8);
+               BCL_vstore(pb_X+ind+2*8, tvsum);
 
-               tvsum = _mm512_loadu_pd(ptr+3*8);
-               _mm512_storeu_pd(pb_X+ind+3*8, tvsum); 
+               BCL_vldu(tvsum, ptr+3*8);
+               BCL_vstore(pb_X+ind+3*8, tvsum); 
                
                // Y  
                ptr = &sumY[0]; 
-               tvsum = _mm512_loadu_pd(ptr);
-               _mm512_storeu_pd(pb_Y+ind, tvsum); 
+               BCL_vldu(tvsum, ptr);
+               BCL_vstore(pb_Y+ind, tvsum); 
                
-               tvsum = _mm512_loadu_pd(ptr+8);
-               _mm512_storeu_pd(pb_Y+ind+8, tvsum); 
+               BCL_vldu(tvsum, ptr+8);
+               BCL_vstore(pb_Y+ind+8, tvsum); 
                
-               tvsum = _mm512_loadu_pd(ptr+2*8);
-               _mm512_storeu_pd(pb_Y+ind+2*8, tvsum);
+               BCL_vldu(tvsum, ptr+2*8);
+               BCL_vstore(pb_Y+ind+2*8, tvsum);
 
-               tvsum = _mm512_loadu_pd(ptr+3*8);
-               _mm512_storeu_pd(pb_Y+ind+3*8, tvsum); 
+               BCL_vldu(tvsum, ptr+3*8);
+               BCL_vstore(pb_Y+ind+3*8, tvsum); 
             }
 
             // connected nodes 

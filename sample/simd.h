@@ -7,16 +7,17 @@
 
 #ifdef BLC_X86
    #if defined(BLC_AVXZ) || defined(BLC_AVX512)
+      #include<immintrin.h>
       #if VALUETPYE == double
          #define VLEN 8
 /*
  *       AVX512 double precision 
  */
          #define BCL_VTYPE __m512d 
-         #define BCL_vuld(v_, p_) v_ = _mm512_loadu_pd(p_) 
+         #define BCL_vldu(v_, p_) v_ = _mm512_loadu_pd(p_) 
          #define BCL_vld(v_, p_) v_ = _mm512_load_pd(p_) 
          #define BCL_vzero(v_) v_ = _mm512_setzero_pd() 
-         #define BCL_vust(v_, p_) _mm512_storeu_pd(p_, v_) 
+         #define BCL_vstu(v_, p_) _mm512_storeu_pd(p_, v_) 
          #define BCL_vst(v_, p_)  _mm512_store_pd(p_, v_) 
          #define BCL_vbcast(v_, p_) v_ = _mm512_set1_pd(*(p_))
          #define BCL_vadd(d_, s1_, s2_) d_ = _m512_add_pd(s1_, s2_)
