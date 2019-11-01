@@ -38,6 +38,7 @@
             d_ = _mm512_maskz_rcp14_pd(k0_, d_);\
          }
          #define BCL_cvtint2mask(k_, ik) k_ = _cvtu32_mask8(ik_) 
+      
       #elif VALUETYPE == float
          #define VLEN 16
          #define VTYPE __m512 
@@ -179,7 +180,32 @@
       #error "Unsupported X86 SIMD!"
    #endif
 
-#elif defined(BLC_VSX)  // openPower vector unit  
+#elif defined(BLC_VSX)  // openPower vector unit 
+   #include <altivec.h>   
+   #if VALUETPYE == double
+      #define VLEN 2
+      #define VTYPE vector double  
+   #elif VALUETYPE == float
+      #define VLEN 4
+      #define VTYPE vector float 
+   #else
+      #error "Unsupported type for VSX SIMD!"
+   #endif
+   #define BLC_vldu(v_, p_) v_ = vec_vsx_ld(0, (VTYPE*)(p_)) 
+   #define BLC_vld(v_, p_) v_ = vec_ld(0, (VTYPE*)(p_))  
+   #define BLC_vzero(v_) v_ = vec_splats((VALUETYPE)0.0)
+   #define BLC_vstu(p_, v_) vec_vsx_st(v_, 0, (VTYPE*)(p_))
+   #define BLC_vst(p_, v_)  vec_st(v_, 0, (VTYPE*)(p_))
+   #define BLC_vbcast(v_, p_) v_ =  vec_splats(*((VALUETYPE*)(p_)))
+   #define BLC_vadd(d_, s1_, s2_) d_ =  vec_add(s1_, s2_) 
+   #define BLC_vsub(d_, s1_, s2_) d_ =  vec_sub(s1_, s2_) 
+   #define BLC_vmul(d_, s1_, s2_) d_ =  vec_mul(s1_, s2_) 
+   #define BLC_vdiv(d_, s1_, s2_) d_ =  vec_div(s1_, s2_) 
+   #define BLC_vmac(d_, s1_, s2_) d_ =  vec_madd(s1_, s2_, d_) 
+   #define BCL_vrcp(d_) d_ = vec_re(d_); // reciprocal 
+   // NOTE: need to use vec_se  
+   //#define BCL_imaskz_vrcp(d_, ik_) \
+
 
 #elif defined(BLC_ARM64) // arm64 machine 
 
