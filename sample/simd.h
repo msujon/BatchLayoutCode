@@ -7,7 +7,8 @@
 
 // defining arch... done from makefile 
 #define BLC_X86   
-#define BLC_AVXZ 
+//#define BLC_AVXZ 
+#define BLC_AVX2 
  /*
   *   inst format: inst(dist, src1, src2)
   */
@@ -67,6 +68,7 @@
  * AVX 
  */
    #elif defined(BLC_AVX2) || defined(BLC_AVXMAC) || defined(BLC_AVX) 
+      #include<immintrin.h>
       #if defined(BLC_AVX2) || defined(BLC_AVXMAC)
          #define ArchHasMAC 
       #endif
@@ -88,21 +90,21 @@
          #else
             #define BCL_vmac(d_, s1_, s2_) \
             {  VTYPE vt_; \
-               vt_ = _m256_mul_pd(s1_, s2_); \
-               d_ = _m256_add_pd(vt_, d_); \
+               vt_ = _mm256_mul_pd(s1_, s2_); \
+               d_ = _mm256_add_pd(vt_, d_); \
             }
          #endif
          // NOTE: no reciprocal for double precision, only for single precision 
          //#define BCL_vrcp(d_) d_ = _mm256_rcp14_pd(d_); // reciprocal 
          #define BCL_vrcp(d_) \
-         {   VTYPE _vx = _m256_set1_pd(1.0); \
-             d_ = _m256_div_pd(_vx, d_); \
+         {   VTYPE _vx = _mm256_set1_pd(1.0); \
+             d_ = _mm256_div_pd(_vx, d_); \
          }
          //#define BCL_maskz_vrcp(k_, d_) d_ = _mm256_rcp14_pd(k_, d_); // reciprocal
          // need to test 
          #define BCL_imaskz_vrcp(d_, ik_) \
          {  VTYPE v0_ = _mm256_setzero_pd();\
-            VTYPE v1_ = _mm256_setzero+pd(1.0);\
+            VTYPE v1_ = _mm256_set1_pd(1.0);\
             d_ = _mm256_blend_pd(d_, v1_, ik_); \
             d_ = _mm256_div_pd(v1_, d_); \
             d_ = _mm256_blend_pd(d_, v0_, ik_); \

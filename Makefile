@@ -7,7 +7,7 @@ INCDIR = -I$(BatchLayout) -I$(SAMPLE) -I$(UNITTEST) -I$(Kernel)
 
 COMPILER = g++
 
-FLAGS = -g -fomit-frame-pointer -fopenmp -ffast-math -mavx512f -mavx512dq -O3 -std=c++11 -DCPP
+FLAGS = -fopenmp -ffast-math -mavx2 -mfma -m64 -O3 -std=c++11 -DCPP
 #FLAGS = -g -fopenmp -O3 -std=c++11 -DCPP
 
 all: batchlayout

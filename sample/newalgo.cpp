@@ -1,5 +1,5 @@
 #include "newalgo.h"
-#include "nblas.h"
+//#include "nblas.h"
 #include "simd.h"
 
 #define NEARZERO 1e-30
@@ -6684,28 +6684,22 @@
                         const unsigned int n = j-i;
                         register VTYPE vxj;
                         register VTYPE vyj;
-                        unsigned int ik0, ik1, ik2, ik3; 
-                        const unsigned int AONE = (1<<VLEN)-1; // 255 
+                        //unsigned int ik0, ik1, ik2, ik3; 
                         
                         BCL_vbcast(vxj, blasX+j);
                         BCL_vbcast(vyj, blasY+j);
 /*
  *                      Possible to further optimize.. will think later 
  */
-                     #if 0
-                        ik0 = ( n >= 0 && n < 8 ) ? (255 & (~(1 << (n%8))))  : 255; 
-                        ik1 = ( n >=8 && n < 8+8 )? (255 & ~(1 << n%8))  : 255; 
-                        ik2 = ( n >=2*8 && n < 2*8+8 )? (255 & ~(1 << n%8))  : 255; 
-                        ik3 = ( n >=3*8 && n < 3*8+8 )? (255 & ~(1 << n%8))  : 255; 
-                     #endif
-                        ik0 = ( n >= 0 && n < VLEN ) ? 
-                              (AONE & (~(1 << (n%VLEN)))) : AONE; 
-                        ik1 = ( n >= VLEN && n < 2*VLEN )? 
-                              (AONE & ~(1 << n%VLEN))     : AONE; 
-                        ik2 = ( n >=2*VLEN && n < 3*VLEN )? 
-                              (AONE & ~(1 << n%VLEN))     : AONE; 
-                        ik3 = ( n >=3*VLEN && n < 4*VLEN )? 
-                              (AONE & ~(1 << n%VLEN))     : AONE; 
+                  #define AONE ((1<<VLEN)-1)  
+                  #define ik0 (( n >= 0 && n < VLEN ) ? \
+                              (AONE & (~(1 << (n%VLEN)))) : AONE) 
+                  #define ik1  (( n >= VLEN && n < 2*VLEN )? \
+                              (AONE & ~(1 << n%VLEN))     : AONE) 
+                  #define ik2 (( n >=2*VLEN && n < 3*VLEN )? \
+                              (AONE & ~(1 << n%VLEN))     : AONE) 
+                  #define ik3 (( n >=3*VLEN && n < 4*VLEN )? \
+                              (AONE & ~(1 << n%VLEN))     : AONE) 
                         
 		        
                         BCL_vsub(vdx0, vxj, vx0);
@@ -6728,13 +6722,15 @@
                         BCL_vmac(vd0, vdy0, vdy0);
                         BCL_vmac(vd1, vdy1, vdy1);
                         BCL_vmac(vd2, vdy2, vdy2);
-                        BCL_vmac(vd3, vdy3, vdy3);
-                        
+                        BCL_vmac(vd3, vdy3, vdy3);               
+/*
+ *                      FIXME: AVX blends need 4 bit imm ???? 
+ */
                         BCL_imaskz_vrcp(vd0, ik0); 
                         BCL_imaskz_vrcp(vd1, ik1); 
                         BCL_imaskz_vrcp(vd2, ik2); 
                         BCL_imaskz_vrcp(vd3, ik3); 
-		     
+                        
                         //tfx0 += dx0 * d0;
                         BCL_vmac(vtfx0, vdx0, vd0);
                         BCL_vmac(vtfx1, vdx1, vd1);
