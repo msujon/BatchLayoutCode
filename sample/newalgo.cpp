@@ -1,5 +1,5 @@
 #include "newalgo.h"
-//#include "nblas.h"
+#include "nblas.h"
 #include "simd.h"
 
 #define NEARZERO 1e-30
@@ -6678,10 +6678,10 @@
 /*
  *             location where we need to skip some points i==j
  *             NOTE: its UR iteration, no need to optimize 
- */
+ */                  
+                     #pragma unroll (UR*VLEN)
                      for (j = i; j < i+UR*VLEN; j++) 
                      {
-                        const unsigned int n = j-i;
                         register VTYPE vxj;
                         register VTYPE vyj;
                         //unsigned int ik0, ik1, ik2, ik3; 
@@ -6689,19 +6689,19 @@
                         BCL_vbcast(vxj, blasX+j);
                         BCL_vbcast(vyj, blasY+j);
 /*
- *                      Possible to further optimize.. will think later 
+ *                FIXME: ik0 must be compile time to use with AVX  
  */
+                  #define ND (j-i)
                   #define AONE ((1<<VLEN)-1)  
-                  #define ik0 (( n >= 0 && n < VLEN ) ? \
-                              (AONE & (~(1 << (n%VLEN)))) : AONE) 
-                  #define ik1  (( n >= VLEN && n < 2*VLEN )? \
-                              (AONE & ~(1 << n%VLEN))     : AONE) 
-                  #define ik2 (( n >=2*VLEN && n < 3*VLEN )? \
-                              (AONE & ~(1 << n%VLEN))     : AONE) 
-                  #define ik3 (( n >=3*VLEN && n < 4*VLEN )? \
-                              (AONE & ~(1 << n%VLEN))     : AONE) 
+                  #define ik0 (( ND >= 0 && ND < VLEN ) ? \
+                              (AONE & (~(1 << (ND%VLEN)))) : AONE) 
+                  #define ik1  (( ND >= VLEN && ND < 2*VLEN )? \
+                              (AONE & ~(1 << ND%VLEN))     : AONE) 
+                  #define ik2 (( ND >=2*VLEN && ND < 3*VLEN )? \
+                              (AONE & ~(1 << ND%VLEN))     : AONE) 
+                  #define ik3 (( ND >=3*VLEN && ND < 4*VLEN )? \
+                              (AONE & ~(1 << ND%VLEN))     : AONE) 
                         
-		        
                         BCL_vsub(vdx0, vxj, vx0);
 		        BCL_vsub(vdx1, vxj, vx1);
 		        BCL_vsub(vdx2, vxj, vx2);
