@@ -9,6 +9,8 @@
 #define BLC_X86   
 //#define BLC_AVXZ 
 #define BLC_AVX2 
+
+//#define BLC_AVX2 
  /*
   *   inst format: inst(dist, src1, src2)
   */
@@ -101,13 +103,21 @@
              d_ = _mm256_div_pd(_vx, d_); \
          }
          //#define BCL_maskz_vrcp(k_, d_) d_ = _mm256_rcp14_pd(k_, d_); // reciprocal
-         // need to test 
+         // FIXME: AVX needs imm4 as param for blend_pd, int var won't work 
          #define BCL_imaskz_vrcp(d_, ik_) \
          {  VTYPE v0_ = _mm256_setzero_pd();\
             VTYPE v1_ = _mm256_set1_pd(1.0);\
             d_ = _mm256_blend_pd(d_, v1_, ik_); \
             d_ = _mm256_div_pd(v1_, d_); \
             d_ = _mm256_blend_pd(d_, v0_, ik_); \
+         }
+         // We are creating maskz version
+         // NOTE: provided d_ has exact zero... (x0 - x0) may not provide zero
+         // in fp calculation ... 
+         #define BCL_maskz_vrcp(d_) \
+         {\
+            VTYPE vz_; \
+            BLC_vzero(vz_);\
          }
          //#define BCL_cvtint2mask(k_, ik) k_ = _cvtu32_mask8(ik_) 
       #elif VALUETYPE == float
@@ -143,6 +153,10 @@
          #endif
          //#define BCL_maskz_vrcp(k_, d_) d_ = _mm256_rcp14_ps(k_, d_); // reciprocal
          // need to test 
+/*
+ *       NOTE: imm8 version of blend is way faster than vblend... try to use 
+ *       it... but we will need compile time const 
+ */
          #if 1
             #define BCL_imaskz_vrcp(d_, ik_) \
             {  VTYPE v0_ = _mm256_setzero_ps();\
@@ -204,15 +218,19 @@
    #define BLC_vmul(d_, s1_, s2_) d_ =  vec_mul(s1_, s2_) 
    #define BLC_vdiv(d_, s1_, s2_) d_ =  vec_div(s1_, s2_) 
    #define BLC_vmac(d_, s1_, s2_) d_ =  vec_madd(s1_, s2_, d_) 
-   #define BCL_vrcp(d_) d_ = vec_re(d_); // reciprocal 
-   // NOTE: need to use vec_se  
-   //#define BCL_imaskz_vrcp(d_, ik_) \
+   #define BCL_vrcp(d_) d_ = vec_recip(d_); // reciprocal 
+   //#define BCL_imaskz_vrcp(d_, ik_) // no support for imask 
+   //#define BCL_maskz_vrcp(d_) \
+   {\
+      VTYPE vz_; \
+      BLC_vzero(vz_);\
+
 
 
 #elif defined(BLC_ARM64) // arm64 machine 
 
 #elif defined(BLC_FRCGNUVEC) // GNUVEC by GCC  
-
+   
 #else
    #error "Unsupported Architecture!"
 #endif

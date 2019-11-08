@@ -40,13 +40,16 @@
                                   // N = 128: spup = 2.07   FIXED  
                                   // N = 64: spup = 2.27  
    
-   #define MDIM_VEC_UR4_NOSYNC 1  // N=256: spup = 1.8 ... FIXED 
+   //#define MDIM_VEC_UR4_NOSYNC 1  // N=256: spup = 1.8 ... FIXED 
                                   // N=128: spup = 1.9
                                   // N=64: spup = 2.25 -- with 256 eff, spup = 1.85  
                                   // N=32: spup = 2.91 -- with 256 eff, spup = 1.89 
    //no splitting of two cases 
   //#define MDIM_VEC_UR4_MASK_NOSYNC 1  // N=256: 
                                        //
+   //#define MDIM_VEC_UR2_NOSYNC 1  // N=256:  
+   //#define MDIM_VEC_UR1_NOSYNC 1  // AVX: N=64, spup = 0.9 :  
+   #define MDIM_VEC_UR1 1  // AVX: N=64, spup = 0.87  :  
 
 	newalgo::newalgo(CSR<INDEXTYPE, VALUETYPE> &A_csr, string input, string outputd, int init, double weight, double th, string ifile){
 		graph.make_empty();
@@ -6678,8 +6681,8 @@
 /*
  *             location where we need to skip some points i==j
  *             NOTE: its UR iteration, no need to optimize 
- */                  
-                     #pragma unroll (UR*VLEN)
+ */     
+#if defined(AVXZ) || defined(AVX512) 
                      for (j = i; j < i+UR*VLEN; j++) 
                      {
                         register VTYPE vxj;
@@ -6743,6 +6746,311 @@
                         BCL_vmac(vtfy2, vdy2, vd2);
                         BCL_vmac(vtfy3, vdy3, vd3);
                      }
+#elif defined(AVX) // avx... makes the perf much slower!!! 
+                     for (j = i; j < i+UR*VLEN; j++) 
+                     {
+                        const int n = j-i;
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+                        //unsigned int ik0, ik1, ik2, ik3; 
+                        
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+/*
+ *                FIXME: ik0 must be compile time to use with AVX  
+ */
+                  #define ND (j-i)
+                  #define AONE ((1<<VLEN)-1)  
+                  #define ik0 (( ND >= 0 && ND < VLEN ) ? \
+                              (AONE & (~(1 << (ND%VLEN)))) : AONE) 
+                  #define ik1  (( ND >= VLEN && ND < 2*VLEN )? \
+                              (AONE & ~(1 << ND%VLEN))     : AONE) 
+                  #define ik2 (( ND >=2*VLEN && ND < 3*VLEN )? \
+                              (AONE & ~(1 << ND%VLEN))     : AONE) 
+                  #define ik3 (( ND >=3*VLEN && ND < 4*VLEN )? \
+                              (AONE & ~(1 << ND%VLEN))     : AONE) 
+                        
+                        BCL_vsub(vdx0, vxj, vx0);
+		        BCL_vsub(vdx1, vxj, vx1);
+		        BCL_vsub(vdx2, vxj, vx2);
+		        BCL_vsub(vdx3, vxj, vx3);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+		        BCL_vsub(vdy1, vyj, vy1);
+		        BCL_vsub(vdy2, vyj, vy2);
+		        BCL_vsub(vdy3, vyj, vy3);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+		        BCL_vmul(vd1, vdx1, vdx1);
+		        BCL_vmul(vd2, vdx2, vdx2);
+		        BCL_vmul(vd3, vdx3, vdx3);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        BCL_vmac(vd1, vdy1, vdy1);
+                        BCL_vmac(vd2, vdy2, vdy2);
+                        BCL_vmac(vd3, vdy3, vdy3);               
+/*
+ *                      FIXME: AVX blends need 4 bit imm ???? 
+ */
+                        switch(n%VLEN)
+                        {
+                           case 0:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1)); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= 2*VLEN && n < 3*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              else if (n >= 3*VLEN && n < 4*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              break;
+                           case 1: 
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<1)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<1)); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= 2*VLEN && n < 3*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<1)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              else if (n >= 3*VLEN && n < 4*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<1)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              break;
+                           case 2: 
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<2)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<2)); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= 2*VLEN && n < 3*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<2)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              else if (n >= 3*VLEN && n < 4*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<2)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              break;
+                           case 3:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<3)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<3)); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= 2*VLEN && n < 3*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<3)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              else if (n >= 3*VLEN && n < 4*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<3)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              break;
+                              // single precision 
+                           case 4:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<4)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<4)); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= 2*VLEN && n < 3*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<4)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              else if (n >= 3*VLEN && n < 4*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<4)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              break;
+                           case 5:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<5)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<5)); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= 2*VLEN && n < 3*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<5)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              else if (n >= 3*VLEN && n < 4*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<5)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              break;
+                           case 6:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<6)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<6)); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= 2*VLEN && n < 3*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<6)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              else if (n >= 3*VLEN && n < 4*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<6)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              break;
+                           case 7:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<7)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<7)); 
+                                 BCL_imaskz_vrcp(vd2, AONE); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              }
+                              else if (n >= 2*VLEN && n < 3*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<7)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                              else if (n >= 3*VLEN && n < 4*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                                 BCL_imaskz_vrcp(vd2, AONE& ~(1<<7)); 
+                                 BCL_imaskz_vrcp(vd3, AONE); 
+                              } 
+                           }
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+                        BCL_vmac(vtfx1, vdx1, vd1);
+                        BCL_vmac(vtfx2, vdx2, vd2);
+                        BCL_vmac(vtfx3, vdx3, vd3);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                        BCL_vmac(vtfy1, vdy1, vd1);
+                        BCL_vmac(vtfy2, vdy2, vd2);
+                        BCL_vmac(vtfy3, vdy3, vd3);
+                     }
+#else // for all other systems 
+#endif
                   }
 /*
  *                Upper part  
@@ -7451,6 +7759,1581 @@
                 cout << "Efficientunroll Minbatch Energy:" << ENERGY << endl;
                 cout << "Efficientunroll Minibatch Parallel Wall time required:" << end - start << endl;
                 writeToFileEFF("EFFUR4-VEC-MASK-NOSYNC"+ to_string(BATCHSIZE)+"PARAOUT" + to_string(LOOP));
+         #endif
+                result.push_back(ENERGY);
+                result.push_back(end - start);
+/*
+ *              NOTE: free allocated memory... Why not done for other mem???
+ */
+                free(sumX);
+                free(sumY);
+                return result;
+        }
+
+#elif defined(MDIM_VEC_UR2_NOSYNC)
+
+   vector<VALUETYPE> newalgo::EfficientVersionMdim(INDEXTYPE ITERATIONS, 
+         INDEXTYPE NUMOFTHREADS, INDEXTYPE BATCHSIZE)
+   {
+      INDEXTYPE LOOP = 0;
+      VALUETYPE start, end, ENERGY, ENERGY0, *pb_X, *pb_Y;
+      VALUETYPE STEP = 1.0;
+      VALUETYPE *sumX, *sumY;
+      
+      
+      vector<VALUETYPE> result;
+      pb_X = static_cast<VALUETYPE *> (::operator new (sizeof(VALUETYPE[BATCHSIZE])));
+      pb_Y = static_cast<VALUETYPE *> (::operator new (sizeof(VALUETYPE[BATCHSIZE])));
+      ENERGY0 = ENERGY = numeric_limits<VALUETYPE>::max();
+
+/*
+ *    NOTE: we have different version of reciprocals... I'm defining it here
+ *                   NOTE: rcp14_pd inst... precision 2^-14
+ *                   rcp28_pd has relative error 2^-28 ... rounding??? 
+ *                   NOTE: reciprocal is highly error prone for over/underflow
+ */
+      #define UR 2
+/*
+ *    NOTE: to avoid overflow the stack, we allocate memory in heap to 
+ *    manage reduction .... 
+ *    FIXME: possible to combine it with pb_X and pb_Y???? 
+ *           size = NUMOFTHREADS * UNROLL * VLEN
+ *    solved the stack overflow by this way
+ *    NEED C++17 to use aligned new 
+ */
+      sumX = static_cast<VALUETYPE *> 
+               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*UR*VLEN])));
+      sumY = static_cast<VALUETYPE *> 
+               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*UR*VLEN])));
+
+      omp_set_num_threads(NUMOFTHREADS);
+/*
+ *    time included initDFS 
+ */
+      start = omp_get_wtime();
+
+      initDFS();
+      
+      while(LOOP < ITERATIONS)
+      {
+         ENERGY0 = ENERGY;
+         ENERGY = 0;
+         for(int i = 0; i < BATCHSIZE; i++)
+         {
+            pb_X[i] = pb_Y[i] = 0;
+         }
+         
+	 for(INDEXTYPE b = 0; b < (graph.rows / BATCHSIZE); b += 1)
+         {
+	    for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i += UR*VLEN)
+            {
+	       int ind = i-b*BATCHSIZE;
+               int m, n, k;
+               register VTYPE vx0, vx1;
+               register VTYPE vy0, vy1;
+/*
+ *             to minimize critical section, we are using extra memory here
+ *             FIXME: use intrinsic to optimize it, like: XoR  
+ */
+               for (m=0; m < NUMOFTHREADS*UR*VLEN; m++)
+                  sumX[m] = sumY[m] = 0.0;
+
+	       BCL_vldu(vx0, blasX + i);
+	       BCL_vldu(vx1, blasX + i+VLEN);
+
+	       BCL_vldu(vy0, blasY + i);
+	       BCL_vldu(vy1, blasY + i+1*VLEN);
+/*
+ *             starting of parallel region 
+ */
+               #pragma omp parallel shared(sumX, sumY)
+               {
+                  int id, nthreads; 
+                  int chunksize;
+                  int j; 
+                  
+                  VTYPE vdx0, vdx1;
+                  VTYPE vdy0, vdy1;
+                  VTYPE vd0, vd1;
+                  VTYPE vtfx0, vtfx1;
+                  VTYPE vtfy0, vtfy1;
+
+                  const int M = graph.rows; 
+                  id = omp_get_thread_num();
+                  nthreads = omp_get_num_threads();
+                  
+                  // init temp sum 
+		  BCL_vzero(vtfx0); BCL_vzero(vtfy0);
+		  BCL_vzero(vtfx1); BCL_vzero(vtfy1);
+/*
+ *                j is up to i... lower up case  
+ */
+                  chunksize = i/nthreads; 
+                  
+                  for(j = id*chunksize; j < (id+1)*chunksize; j++)
+                  {
+                     register VTYPE vxj;
+                     register VTYPE vyj; 
+                     
+                     BCL_vbcast(vxj, blasX+j);
+                     BCL_vbcast(vyj, blasY+j);
+		  
+                     //dx0 = xj - x0;
+		     BCL_vsub(vdx0, vxj, vx0);
+		     BCL_vsub(vdx1, vxj, vx1);
+	          
+                     // dy0 = yj - y0;
+		     BCL_vsub(vdy0, vyj, vy0);
+		     BCL_vsub(vdy1, vyj, vy1);
+	             
+                     //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		     BCL_vmul(vd0, vdx0, vdx0);
+		     BCL_vmul(vd1, vdx1, vdx1);
+                     
+                     BCL_vmac(vd0, vdy0, vdy0);
+                     BCL_vmac(vd1, vdy1, vdy1);
+                     
+                     BCL_vrcp(vd0);
+                     BCL_vrcp(vd1);
+                  
+                     //tfx0 += dx0 * d0;
+                     BCL_vmac(vtfx0, vdx0, vd0);
+                     BCL_vmac(vtfx1, vdx1, vd1);
+
+                     //tfy0 += dy0 * d0;
+                     BCL_vmac(vtfy0, vdy0, vd0);
+                     BCL_vmac(vtfy1, vdy1, vd1);
+                  }
+/*
+ *                cleanup of lower  
+ */
+                  #pragma omp single nowait
+                  {
+                     for (j=nthreads*chunksize; j < i; j++)
+                     {
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+		  
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+                    
+                        //dx0 = xj - x0;
+		        BCL_vsub(vdx0, vxj, vx0);
+		        BCL_vsub(vdx1, vxj, vx1);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+		        BCL_vsub(vdy1, vyj, vy1);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+		        BCL_vmul(vd1, vdx1, vdx1);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        BCL_vmac(vd1, vdy1, vdy1);
+                        
+                        BCL_vrcp(vd0); 
+                        BCL_vrcp(vd1); 
+                  
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+                        BCL_vmac(vtfx1, vdx1, vd1);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                        BCL_vmac(vtfy1, vdy1, vd1);
+                     }
+
+/*
+ *             location where we need to skip some points i==j
+ *             NOTE: its UR iteration, no need to optimize 
+ */     
+#if defined(AVXZ) || defined(AVX512) 
+                     for (j = i; j < i+UR*VLEN; j++) 
+                     {
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+                        //unsigned int ik0, ik1, ik2, ik3; 
+                        
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+/*
+ *                FIXME: ik0 must be compile time to use with AVX  
+ */
+                  #define ND (j-i)
+                  #define AONE ((1<<VLEN)-1)  
+                  #define ik0 (( ND >= 0 && ND < VLEN ) ? \
+                              (AONE & (~(1 << (ND%VLEN)))) : AONE) 
+                  #define ik1  (( ND >= VLEN && ND < 2*VLEN )? \
+                              (AONE & ~(1 << ND%VLEN))     : AONE) 
+                        BCL_vsub(vdx0, vxj, vx0);
+		        BCL_vsub(vdx1, vxj, vx1);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+		        BCL_vsub(vdy1, vyj, vy1);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+		        BCL_vmul(vd1, vdx1, vdx1);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        BCL_vmac(vd1, vdy1, vdy1);
+/*
+ *                      FIXME: AVX blends need 4 bit imm ???? 
+ */
+                        BCL_imaskz_vrcp(vd0, ik0); 
+                        BCL_imaskz_vrcp(vd1, ik1); 
+                        
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+                        BCL_vmac(vtfx1, vdx1, vd1);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                        BCL_vmac(vtfy1, vdy1, vd1);
+                     }
+#elif defined(AVX) // avx... makes the perf much slower!!! 
+                     for (j = i; j < i+UR*VLEN; j++) 
+                     {
+                        const int n = j-i;
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+                        //unsigned int ik0, ik1, ik2, ik3; 
+                        
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+/*
+ *                FIXME: ik0 must be compile time to use with AVX  
+ */
+                  #define ND (j-i)
+                  #define AONE ((1<<VLEN)-1)  
+                  #define ik0 (( ND >= 0 && ND < VLEN ) ? \
+                              (AONE & (~(1 << (ND%VLEN)))) : AONE) 
+                  #define ik1  (( ND >= VLEN && ND < 2*VLEN )? \
+                              (AONE & ~(1 << ND%VLEN))     : AONE) 
+                        
+                        BCL_vsub(vdx0, vxj, vx0);
+		        BCL_vsub(vdx1, vxj, vx1);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+		        BCL_vsub(vdy1, vyj, vy1);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+		        BCL_vmul(vd1, vdx1, vdx1);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        BCL_vmac(vd1, vdy1, vdy1);
+/*
+ *                      FIXME: AVX blends need 4 bit imm ???? 
+ */
+                        switch(n%VLEN)
+                        {
+                           case 0:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1)); 
+                              }
+                              break;
+                           case 1: 
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<1)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<1)); 
+                              }
+                              break;
+                           case 2: 
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<2)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<2)); 
+                              }
+                              break;
+                           case 3:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<3)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<3)); 
+                              }
+                              break;
+                              // single precision 
+                           case 4:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<4)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<4)); 
+                              }
+                              break;
+                           case 5:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<5)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<5)); 
+                              }
+                              break;
+                           case 6:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<6)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<6)); 
+                              }
+                              break;
+                           case 7:
+                              if (n >=0 && n < VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<7)); 
+                                 BCL_imaskz_vrcp(vd1, AONE); 
+                              }
+                              else if (n >= VLEN && n < 2*VLEN)
+                              {
+                                 BCL_imaskz_vrcp(vd0, AONE); 
+                                 BCL_imaskz_vrcp(vd1, AONE & ~(1<<7)); 
+                              }
+                           }
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+                        BCL_vmac(vtfx1, vdx1, vd1);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                        BCL_vmac(vtfy1, vdy1, vd1);
+                     }
+#else // for all other systems 
+#endif
+                  }
+/*
+ *                Upper part  
+ *
+ */ 
+                  chunksize = (M - i - UR*VLEN)/nthreads; 
+
+                  for(j = (i+UR*VLEN)+id*chunksize; j < (i+UR*VLEN)+(id+1)*chunksize; j++)
+                  {
+                     register VTYPE vxj;
+                     register VTYPE vyj;
+		  
+                     BCL_vbcast(vxj, blasX+j);
+                     BCL_vbcast(vyj, blasY+j);
+                     //dx0 = xj - x0;
+		     BCL_vsub(vdx0, vxj, vx0);
+		     BCL_vsub(vdx1, vxj, vx1);
+	          
+                     // dy0 = yj - y0;
+		     BCL_vsub(vdy0, vyj, vy0);
+		     BCL_vsub(vdy1, vyj, vy1);
+	             
+                     //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		     BCL_vmul(vd0, vdx0, vdx0);
+		     BCL_vmul(vd1, vdx1, vdx1);
+                     
+                     BCL_vmac(vd0, vdy0, vdy0);
+                     BCL_vmac(vd1, vdy1, vdy1);
+                     
+                     BCL_vrcp(vd0); 
+                     BCL_vrcp(vd1); 
+                  
+                     //tfx0 += dx0 * d0;
+                     BCL_vmac(vtfx0, vdx0, vd0);
+                     BCL_vmac(vtfx1, vdx1, vd1);
+
+                     //tfy0 += dy0 * d0;
+                     BCL_vmac(vtfy0, vdy0, vd0);
+                     BCL_vmac(vtfy1, vdy1, vd1);
+                  }
+/*
+ *                cleanup 
+ */
+                  #pragma omp single nowait 
+                  {
+                     for (j=(i+UR*VLEN)+nthreads*chunksize; j < M; j++)
+                     {
+                        register VTYPE vxj; 
+                        register VTYPE vyj;
+		  
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+                        //dx0 = xj - x0;
+		        BCL_vsub(vdx0, vxj, vx0);
+		        BCL_vsub(vdx1, vxj, vx1);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+		        BCL_vsub(vdy1, vyj, vy1);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+		        BCL_vmul(vd1, vdx1, vdx1);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        BCL_vmac(vd1, vdy1, vdy1);
+                        
+                        BCL_vrcp(vd0); 
+                        BCL_vrcp(vd1); 
+		     
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+                        BCL_vmac(vtfx1, vdx1, vd1);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                        BCL_vmac(vtfy1, vdy1, vd1);
+                     }
+                  }
+/*
+ *                Reduction without synchronization  
+ */
+                  {
+                     register VTYPE tv; 
+                     double *ptr = sumX + id*UR*VLEN;
+                     
+                     BCL_vldu(tv, ptr);
+                     BCL_vadd(vtfx0, vtfx0, tv);
+                     BCL_vstu(ptr, vtfx0);
+                     
+                     //fx1 += tfx1; 
+                     BCL_vldu(tv, ptr+1*VLEN);
+                     BCL_vadd(vtfx1, vtfx1, tv);
+                     BCL_vstu(ptr+1*VLEN, vtfx1);
+                     
+                     //fy1 += tfy1; 
+                     ptr = (double*) sumY + id*UR*VLEN;
+                     BCL_vldu(tv, ptr);
+                     BCL_vadd(vtfy0, vtfy0, tv);
+                     BCL_vstu(ptr, vtfy0);
+                     
+                     BCL_vldu(tv, ptr+1*VLEN);
+                     BCL_vadd(vtfy1, vtfy1, tv);
+                     BCL_vstu(ptr+1*VLEN, vtfy1);
+                  }
+               }
+/*
+ *             Out of parallel region 
+ */
+/*
+ *             sum the results up: 
+ *             FIXME: use intrinsic to speed it up 
+ */
+               for(m=1; m < NUMOFTHREADS; m++)
+               {
+                  for (n=0; n < UR*VLEN; n++)
+                  {
+                     sumX[n] += sumX[m*UR*VLEN+n];
+                     sumY[n] += sumY[m*UR*VLEN+n];
+                  }
+               }
+
+
+               double *ptr = &sumX[0]; 
+               VTYPE tvsum;
+               
+               
+               BCL_vldu(tvsum, ptr);
+               BCL_vstu(pb_X+ind, tvsum); 
+               
+               BCL_vldu(tvsum, ptr+1*VLEN);
+               BCL_vstu(pb_X+ind+VLEN, tvsum); 
+               
+               // Y  
+               ptr = &sumY[0]; 
+               BCL_vldu(tvsum, ptr);
+               BCL_vstu(pb_Y+ind, tvsum); 
+               
+               BCL_vldu(tvsum, ptr+VLEN);
+               BCL_vstu(pb_Y+ind+VLEN, tvsum); 
+            }
+
+            // connected nodes 
+	    for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i += 1)
+            {   
+               int ind = i-b*BATCHSIZE;
+               VALUETYPE pbX=0.0, pbY=0.0;
+               VALUETYPE dist, distX, distY;
+               for(INDEXTYPE j = graph.rowptr[i]; j < graph.rowptr[i+1]; j += 1)
+               {
+                  int v = graph.colids[j];
+                  distX = blasX[v] - blasX[i];
+                  distY = blasY[v] - blasY[i];
+                  dist = (distX * distX + distY * distY);
+                  dist = sqrt(dist) + 1.0 / dist;
+                  pbX += distX * dist;
+                  pbY += distY * dist;
+               }
+               pb_X[ind] = pbX - pb_X[ind];
+               pb_Y[ind] = pbY - pb_Y[ind];
+            }
+	    /*printf("After:\n");
+            for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i++)
+            {
+               printf("%d = %lf,", i, pb_X[i-b*BATCHSIZE]);
+            }
+	    */
+	    for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i += 1)
+            {
+               int ind = i-b*BATCHSIZE;
+               VALUETYPE d;
+	       d = (pb_X[ind] * pb_X[ind] + pb_Y[ind] * pb_Y[ind]);
+	       ENERGY += d ;
+	       
+               d = STEP / sqrt(d);
+	       blasX[i] += pb_X[ind] * d;
+               blasY[i] += pb_Y[ind] * d;
+	       
+               pb_X[ind] = 0;
+	       pb_Y[ind] = 0;    
+            }
+         }
+/*
+ *    cleanup 
+ */
+			INDEXTYPE cleanup = (graph.rows/BATCHSIZE) * BATCHSIZE;
+			#pragma omp parallel for schedule(dynamic) 
+			for(INDEXTYPE i = cleanup; i < graph.rows; i += 1){
+                                INDEXTYPE ind = i- cleanup;
+                                VALUETYPE fx = 0, fy = 0, distX, distY, dist, dist2;
+                                for(INDEXTYPE j = graph.rowptr[i]; j < graph.rowptr[i+1]; j += 1){
+                                        int v = graph.colids[j];
+                                        distX = blasX[v] - blasX[i];
+                                        distY = blasY[v] - blasY[i];
+                                        dist = (distX * distX + distY * distY);
+                                        dist = sqrt(dist) + 1.0 / dist;
+                                        pb_X[ind] += distX * dist;
+                                        pb_Y[ind] += distY * dist;
+                                }
+                                for(INDEXTYPE j = 0; j < i; j += 1){
+                                        distX = blasX[j] - blasX[i];
+                                        distY = blasY[j] - blasY[i];
+                                        dist2 = 1.0 / (distX * distX + distY * distY);
+                                        fx += distX * dist2;
+                                        fy += distY * dist2;
+                                }
+                                for(INDEXTYPE j = i+1; j < graph.rows; j += 1){
+                                        distX = blasX[j] - blasX[i];
+                                        distY = blasY[j] - blasY[i];
+                                        dist2 = 1.0 / (distX * distX + distY * distY);
+                                        fx += distX * dist2;
+                                        fy += distY * dist2;
+                                }
+                                pb_X[ind] = pb_X[ind] - fx;
+                                pb_Y[ind] = pb_Y[ind] - fy;
+                        }	
+			for(INDEXTYPE i = cleanup; i < graph.rows; i += 1){
+                                int ind = i-cleanup;
+                                double dist = (pb_X[ind]*pb_X[ind] + pb_Y[ind]*pb_Y[ind]);
+                                ENERGY += dist;
+				dist = STEP / sqrt(dist);
+				blasX[i] += pb_X[ind] * dist;
+                                blasY[i] += pb_Y[ind] * dist;
+				pb_X[ind] = pb_Y[ind] = 0;
+                        }
+                        STEP = STEP * 0.999;
+                        LOOP++;
+                }
+                end = omp_get_wtime();
+         #if NO_FWRITE == 0
+                cout << "Efficientunroll Minibatch Size:" << BATCHSIZE  << endl;
+                cout << "Efficientunroll Minbatch Energy:" << ENERGY << endl;
+                cout << "Efficientunroll Minibatch Parallel Wall time required:" << end - start << endl;
+                writeToFileEFF("EFFUR4-VEC-NOSYNC"+ to_string(BATCHSIZE)+"PARAOUT" + to_string(LOOP));
+         #endif
+                result.push_back(ENERGY);
+                result.push_back(end - start);
+/*
+ *              NOTE: free allocated memory... Why not done for other mem???
+ */
+                free(sumX);
+                free(sumY);
+                return result;
+        }
+
+#elif defined(MDIM_VEC_UR1_NOSYNC)
+
+   vector<VALUETYPE> newalgo::EfficientVersionMdim(INDEXTYPE ITERATIONS, 
+         INDEXTYPE NUMOFTHREADS, INDEXTYPE BATCHSIZE)
+   {
+      INDEXTYPE LOOP = 0;
+      VALUETYPE start, end, ENERGY, ENERGY0, *pb_X, *pb_Y;
+      VALUETYPE STEP = 1.0;
+      VALUETYPE *sumX, *sumY;
+      
+      
+      vector<VALUETYPE> result;
+      pb_X = static_cast<VALUETYPE *> (::operator new (sizeof(VALUETYPE[BATCHSIZE])));
+      pb_Y = static_cast<VALUETYPE *> (::operator new (sizeof(VALUETYPE[BATCHSIZE])));
+      ENERGY0 = ENERGY = numeric_limits<VALUETYPE>::max();
+
+/*
+ *    NOTE: we have different version of reciprocals... I'm defining it here
+ *                   NOTE: rcp14_pd inst... precision 2^-14
+ *                   rcp28_pd has relative error 2^-28 ... rounding??? 
+ *                   NOTE: reciprocal is highly error prone for over/underflow
+ */
+      #define UR 1
+/*
+ *    NOTE: to avoid overflow the stack, we allocate memory in heap to 
+ *    manage reduction .... 
+ *    FIXME: possible to combine it with pb_X and pb_Y???? 
+ *           size = NUMOFTHREADS * UNROLL * VLEN
+ *    solved the stack overflow by this way
+ *    NEED C++17 to use aligned new
+ */
+      sumX = static_cast<VALUETYPE *> 
+               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*UR*VLEN*2]))); // padding
+      sumY = static_cast<VALUETYPE *> 
+               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*UR*VLEN*2])));
+
+      omp_set_num_threads(NUMOFTHREADS);
+/*
+ *    time included initDFS 
+ */
+      start = omp_get_wtime();
+
+      initDFS();
+      
+      while(LOOP < ITERATIONS)
+      {
+         ENERGY0 = ENERGY;
+         ENERGY = 0;
+         for(int i = 0; i < BATCHSIZE; i++)
+         {
+            pb_X[i] = pb_Y[i] = 0;
+         }
+         
+	 for(INDEXTYPE b = 0; b < (graph.rows / BATCHSIZE); b += 1)
+         {
+	    for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i += UR*VLEN)
+            {
+	       int ind = i-b*BATCHSIZE;
+               int m, n, k;
+               register VTYPE vx0, vx1;
+               register VTYPE vy0, vy1;
+/*
+ *             to minimize critical section, we are using extra memory here
+ *             FIXME: use intrinsic to optimize it, like: XoR  
+ */
+               for (m=0; m < NUMOFTHREADS*UR*VLEN; m++)
+                  sumX[m] = sumY[m] = 0.0;
+
+	       BCL_vldu(vx0, blasX + i);
+	       BCL_vldu(vy0, blasY + i);
+/*
+ *             starting of parallel region 
+ */
+               #pragma omp parallel shared(sumX, sumY)
+               {
+                  int id, nthreads; 
+                  int chunksize;
+                  int j; 
+                  
+                  VTYPE vdx0;
+                  VTYPE vdy0;
+                  VTYPE vd0;
+                  VTYPE vtfx0;
+                  VTYPE vtfy0;
+
+                  const int M = graph.rows; 
+                  id = omp_get_thread_num();
+                  nthreads = omp_get_num_threads();
+                  
+                  // init temp sum 
+		  BCL_vzero(vtfx0); BCL_vzero(vtfy0);
+/*
+ *                j is up to i... lower up case  
+ */
+                  chunksize = i/nthreads; 
+                  
+                  for(j = id*chunksize; j < (id+1)*chunksize; j++)
+                  {
+                     register VTYPE vxj;
+                     register VTYPE vyj; 
+                     
+                     BCL_vbcast(vxj, blasX+j);
+                     BCL_vbcast(vyj, blasY+j);
+		  
+                     //dx0 = xj - x0;
+		     BCL_vsub(vdx0, vxj, vx0);
+	          
+                     // dy0 = yj - y0;
+		     BCL_vsub(vdy0, vyj, vy0);
+	             
+                     //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		     BCL_vmul(vd0, vdx0, vdx0);
+                     
+                     BCL_vmac(vd0, vdy0, vdy0);
+                     
+                     BCL_vrcp(vd0);
+                  
+                     //tfx0 += dx0 * d0;
+                     BCL_vmac(vtfx0, vdx0, vd0);
+
+                     //tfy0 += dy0 * d0;
+                     BCL_vmac(vtfy0, vdy0, vd0);
+                  }
+/*
+ *                cleanup of lower  
+ */
+                  #pragma omp single nowait
+                  {
+                     for (j=nthreads*chunksize; j < i; j++)
+                     {
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+		  
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+                    
+                        //dx0 = xj - x0;
+		        BCL_vsub(vdx0, vxj, vx0);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        
+                        BCL_vrcp(vd0); 
+                  
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                     }
+
+/*
+ *             location where we need to skip some points i==j
+ *             NOTE: its UR iteration, no need to optimize 
+ */     
+#if defined(AVXZ) || defined(AVX512) 
+                     for (j = i; j < i+UR*VLEN; j++) 
+                     {
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+                        //unsigned int ik0, ik1, ik2, ik3; 
+                        
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+/*
+ *                FIXME: ik0 must be compile time to use with AVX  
+ */
+                  #define ND (j-i)
+                  #define AONE ((1<<VLEN)-1)  
+                  #define ik0 (( ND >= 0 && ND < VLEN ) ? \
+                              (AONE & (~(1 << (ND%VLEN)))) : AONE) 
+                        BCL_vsub(vdx0, vxj, vx0);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+/*
+ *                      FIXME: AVX blends need 4 bit imm ???? 
+ */
+                        BCL_imaskz_vrcp(vd0, ik0); 
+                        
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                     }
+#elif defined(AVX) // avx... makes the perf much slower!!! 
+                     for (j = i; j < i+UR*VLEN; j++) 
+                     {
+                        const int n = j-i;
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+                        //unsigned int ik0, ik1, ik2, ik3; 
+                        
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+/*
+ *                FIXME: ik0 must be compile time to use with AVX  
+ */
+                  #define ND (j-i)
+                  #define AONE ((1<<VLEN)-1)  
+                  #define ik0 (( ND >= 0 && ND < VLEN ) ? \
+                              (AONE & (~(1 << (ND%VLEN)))) : AONE) 
+                        
+                        BCL_vsub(vdx0, vxj, vx0);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+/*
+ *                      FIXME: AVX blends need 4 bit imm ???? 
+ */
+                        switch(n%VLEN)
+                        {
+                           case 0:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1)); 
+                              break;
+                           case 1: 
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<1)); 
+                              break;
+                           case 2: 
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<2)); 
+                              break;
+                           case 3:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<3)); 
+                              break;
+                              // single precision 
+                           case 4:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<4)); 
+                              break;
+                           case 5:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<5)); 
+                              break;
+                           case 6:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<6)); 
+                              break;
+                           case 7:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<7)); 
+                              break;
+                           }
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                     }
+#else // for all other systems 
+#endif
+                  }
+/*
+ *                Upper part  
+ *
+ */ 
+                  chunksize = (M - i - UR*VLEN)/nthreads; 
+
+                  for(j = (i+UR*VLEN)+id*chunksize; j < (i+UR*VLEN)+(id+1)*chunksize; j++)
+                  {
+                     register VTYPE vxj;
+                     register VTYPE vyj;
+		  
+                     BCL_vbcast(vxj, blasX+j);
+                     BCL_vbcast(vyj, blasY+j);
+                     //dx0 = xj - x0;
+		     BCL_vsub(vdx0, vxj, vx0);
+	          
+                     // dy0 = yj - y0;
+		     BCL_vsub(vdy0, vyj, vy0);
+	             
+                     //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		     BCL_vmul(vd0, vdx0, vdx0);
+                     
+                     BCL_vmac(vd0, vdy0, vdy0);
+                     
+                     BCL_vrcp(vd0); 
+                  
+                     //tfx0 += dx0 * d0;
+                     BCL_vmac(vtfx0, vdx0, vd0);
+
+                     //tfy0 += dy0 * d0;
+                     BCL_vmac(vtfy0, vdy0, vd0);
+                  }
+/*
+ *                cleanup 
+ */
+                  #pragma omp single nowait 
+                  {
+                     for (j=(i+UR*VLEN)+nthreads*chunksize; j < M; j++)
+                     {
+                        register VTYPE vxj; 
+                        register VTYPE vyj;
+		  
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+                        //dx0 = xj - x0;
+		        BCL_vsub(vdx0, vxj, vx0);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        
+                        BCL_vrcp(vd0); 
+		     
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                     }
+                  }
+/*
+ *                Reduction without synchronization  
+ */
+                  {
+                     register VTYPE tv; 
+                     double *ptr = sumX + id*UR*VLEN;
+                     
+                     //fx1 += tfx1; 
+                     BCL_vldu(tv, ptr);
+                     BCL_vadd(vtfx0, vtfx0, tv);
+                     BCL_vstu(ptr, vtfx0);
+                     
+                     //fy1 += tfy1; 
+                     ptr = (double*) sumY + id*UR*VLEN;
+                     BCL_vldu(tv, ptr);
+                     BCL_vadd(vtfy0, vtfy0, tv);
+                     BCL_vstu(ptr, vtfy0);
+                  }
+               }
+/*
+ *             Out of parallel region 
+ */
+/*
+ *             sum the results up: 
+ *             FIXME: use intrinsic to speed it up 
+ */
+               for(m=1; m < NUMOFTHREADS; m++)
+               {
+                  for (n=0; n < UR*VLEN; n++)
+                  {
+                     sumX[n] += sumX[m*UR*VLEN+n];
+                     sumY[n] += sumY[m*UR*VLEN+n];
+                  }
+               }
+
+
+               double *ptr = &sumX[0]; 
+               VTYPE tvsum;
+               
+               
+               BCL_vldu(tvsum, ptr);
+               BCL_vstu(pb_X+ind, tvsum); 
+               
+               
+               // Y  
+               ptr = &sumY[0]; 
+               BCL_vldu(tvsum, ptr);
+               BCL_vstu(pb_Y+ind, tvsum); 
+            }
+
+            // connected nodes 
+	    for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i += 1)
+            {   
+               int ind = i-b*BATCHSIZE;
+               VALUETYPE pbX=0.0, pbY=0.0;
+               VALUETYPE dist, distX, distY;
+               for(INDEXTYPE j = graph.rowptr[i]; j < graph.rowptr[i+1]; j += 1)
+               {
+                  int v = graph.colids[j];
+                  distX = blasX[v] - blasX[i];
+                  distY = blasY[v] - blasY[i];
+                  dist = (distX * distX + distY * distY);
+                  dist = sqrt(dist) + 1.0 / dist;
+                  pbX += distX * dist;
+                  pbY += distY * dist;
+               }
+               pb_X[ind] = pbX - pb_X[ind];
+               pb_Y[ind] = pbY - pb_Y[ind];
+            }
+	    /*printf("After:\n");
+            for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i++)
+            {
+               printf("%d = %lf,", i, pb_X[i-b*BATCHSIZE]);
+            }
+	    */
+	    for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i += 1)
+            {
+               int ind = i-b*BATCHSIZE;
+               VALUETYPE d;
+	       d = (pb_X[ind] * pb_X[ind] + pb_Y[ind] * pb_Y[ind]);
+	       ENERGY += d ;
+	       
+               d = STEP / sqrt(d);
+	       blasX[i] += pb_X[ind] * d;
+               blasY[i] += pb_Y[ind] * d;
+	       
+               pb_X[ind] = 0;
+	       pb_Y[ind] = 0;    
+            }
+         }
+/*
+ *    cleanup 
+ */
+			INDEXTYPE cleanup = (graph.rows/BATCHSIZE) * BATCHSIZE;
+			#pragma omp parallel for schedule(dynamic) 
+			for(INDEXTYPE i = cleanup; i < graph.rows; i += 1){
+                                INDEXTYPE ind = i- cleanup;
+                                VALUETYPE fx = 0, fy = 0, distX, distY, dist, dist2;
+                                for(INDEXTYPE j = graph.rowptr[i]; j < graph.rowptr[i+1]; j += 1){
+                                        int v = graph.colids[j];
+                                        distX = blasX[v] - blasX[i];
+                                        distY = blasY[v] - blasY[i];
+                                        dist = (distX * distX + distY * distY);
+                                        dist = sqrt(dist) + 1.0 / dist;
+                                        pb_X[ind] += distX * dist;
+                                        pb_Y[ind] += distY * dist;
+                                }
+                                for(INDEXTYPE j = 0; j < i; j += 1){
+                                        distX = blasX[j] - blasX[i];
+                                        distY = blasY[j] - blasY[i];
+                                        dist2 = 1.0 / (distX * distX + distY * distY);
+                                        fx += distX * dist2;
+                                        fy += distY * dist2;
+                                }
+                                for(INDEXTYPE j = i+1; j < graph.rows; j += 1){
+                                        distX = blasX[j] - blasX[i];
+                                        distY = blasY[j] - blasY[i];
+                                        dist2 = 1.0 / (distX * distX + distY * distY);
+                                        fx += distX * dist2;
+                                        fy += distY * dist2;
+                                }
+                                pb_X[ind] = pb_X[ind] - fx;
+                                pb_Y[ind] = pb_Y[ind] - fy;
+                        }	
+			for(INDEXTYPE i = cleanup; i < graph.rows; i += 1){
+                                int ind = i-cleanup;
+                                double dist = (pb_X[ind]*pb_X[ind] + pb_Y[ind]*pb_Y[ind]);
+                                ENERGY += dist;
+				dist = STEP / sqrt(dist);
+				blasX[i] += pb_X[ind] * dist;
+                                blasY[i] += pb_Y[ind] * dist;
+				pb_X[ind] = pb_Y[ind] = 0;
+                        }
+                        STEP = STEP * 0.999;
+                        LOOP++;
+                }
+                end = omp_get_wtime();
+         #if NO_FWRITE == 0
+                cout << "Efficientunroll Minibatch Size:" << BATCHSIZE  << endl;
+                cout << "Efficientunroll Minbatch Energy:" << ENERGY << endl;
+                cout << "Efficientunroll Minibatch Parallel Wall time required:" << end - start << endl;
+                writeToFileEFF("EFFUR4-VEC-NOSYNC"+ to_string(BATCHSIZE)+"PARAOUT" + to_string(LOOP));
+         #endif
+                result.push_back(ENERGY);
+                result.push_back(end - start);
+/*
+ *              NOTE: free allocated memory... Why not done for other mem???
+ */
+                free(sumX);
+                free(sumY);
+                return result;
+        }
+
+#elif defined(MDIM_VEC_UR1)
+
+   vector<VALUETYPE> newalgo::EfficientVersionMdim(INDEXTYPE ITERATIONS, 
+         INDEXTYPE NUMOFTHREADS, INDEXTYPE BATCHSIZE)
+   {
+      INDEXTYPE LOOP = 0;
+      VALUETYPE start, end, ENERGY, ENERGY0, *pb_X, *pb_Y;
+      VALUETYPE STEP = 1.0;
+      VALUETYPE *sumX, *sumY;
+      
+      
+      vector<VALUETYPE> result;
+      pb_X = static_cast<VALUETYPE *> (::operator new (sizeof(VALUETYPE[BATCHSIZE])));
+      pb_Y = static_cast<VALUETYPE *> (::operator new (sizeof(VALUETYPE[BATCHSIZE])));
+      ENERGY0 = ENERGY = numeric_limits<VALUETYPE>::max();
+
+/*
+ *    NOTE: we have different version of reciprocals... I'm defining it here
+ *                   NOTE: rcp14_pd inst... precision 2^-14
+ *                   rcp28_pd has relative error 2^-28 ... rounding??? 
+ *                   NOTE: reciprocal is highly error prone for over/underflow
+ */
+      #define UR 1
+/*
+ *    NOTE: to avoid overflow the stack, we allocate memory in heap to 
+ *    manage reduction .... 
+ *    FIXME: possible to combine it with pb_X and pb_Y???? 
+ *           size = NUMOFTHREADS * UNROLL * VLEN
+ *    solved the stack overflow by this way
+ *    NEED C++17 to use aligned new
+ */
+#if 0
+      sumX = static_cast<VALUETYPE *> 
+               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*UR*VLEN*2]))); // padding
+      sumY = static_cast<VALUETYPE *> 
+               (::operator new (sizeof(VALUETYPE[NUMOFTHREADS*UR*VLEN*2])));
+#endif
+
+      omp_set_num_threads(NUMOFTHREADS);
+/*
+ *    time included initDFS 
+ */
+      start = omp_get_wtime();
+
+      initDFS();
+      
+      while(LOOP < ITERATIONS)
+      {
+         ENERGY0 = ENERGY;
+         ENERGY = 0;
+         for(int i = 0; i < BATCHSIZE; i++)
+         {
+            pb_X[i] = pb_Y[i] = 0;
+         }
+         
+	 for(INDEXTYPE b = 0; b < (graph.rows / BATCHSIZE); b += 1)
+         {
+	    for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i += UR*VLEN)
+            {
+	       int ind = i-b*BATCHSIZE;
+               int m, n, k;
+               register VTYPE vx0, vx1;
+               register VTYPE vy0, vy1;
+               VTYPE vfx0, vfy0;
+
+	       BCL_vldu(vx0, blasX + i);
+	       BCL_vldu(vy0, blasY + i);
+/*
+ *             starting of parallel region 
+ */
+               #pragma omp parallel shared(sumX, sumY)
+               {
+                  int id, nthreads; 
+                  int chunksize;
+                  int j; 
+                  
+                  VTYPE vdx0;
+                  VTYPE vdy0;
+                  VTYPE vd0;
+                  VTYPE vtfx0;
+                  VTYPE vtfy0;
+
+                  const int M = graph.rows; 
+                  id = omp_get_thread_num();
+                  nthreads = omp_get_num_threads();
+                  
+                  // init temp sum 
+		  BCL_vzero(vtfx0); BCL_vzero(vtfy0);
+/*
+ *                j is up to i... lower up case  
+ */
+                  chunksize = i/nthreads; 
+                  
+                  for(j = id*chunksize; j < (id+1)*chunksize; j++)
+                  {
+                     register VTYPE vxj;
+                     register VTYPE vyj; 
+                     
+                     BCL_vbcast(vxj, blasX+j);
+                     BCL_vbcast(vyj, blasY+j);
+		  
+                     //dx0 = xj - x0;
+		     BCL_vsub(vdx0, vxj, vx0);
+	          
+                     // dy0 = yj - y0;
+		     BCL_vsub(vdy0, vyj, vy0);
+	             
+                     //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		     BCL_vmul(vd0, vdx0, vdx0);
+                     
+                     BCL_vmac(vd0, vdy0, vdy0);
+                     
+                     BCL_vrcp(vd0);
+                  
+                     //tfx0 += dx0 * d0;
+                     BCL_vmac(vtfx0, vdx0, vd0);
+
+                     //tfy0 += dy0 * d0;
+                     BCL_vmac(vtfy0, vdy0, vd0);
+                  }
+/*
+ *                cleanup of lower  
+ */
+                  #pragma omp single nowait
+                  {
+                     for (j=nthreads*chunksize; j < i; j++)
+                     {
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+		  
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+                    
+                        //dx0 = xj - x0;
+		        BCL_vsub(vdx0, vxj, vx0);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        
+                        BCL_vrcp(vd0); 
+                  
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                     }
+
+/*
+ *             location where we need to skip some points i==j
+ *             NOTE: its UR iteration, no need to optimize 
+ */     
+#if defined(AVXZ) || defined(AVX512) 
+                     for (j = i; j < i+UR*VLEN; j++) 
+                     {
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+                        //unsigned int ik0, ik1, ik2, ik3; 
+                        
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+/*
+ *                FIXME: ik0 must be compile time to use with AVX  
+ */
+                  #define ND (j-i)
+                  #define AONE ((1<<VLEN)-1)  
+                  #define ik0 (( ND >= 0 && ND < VLEN ) ? \
+                              (AONE & (~(1 << (ND%VLEN)))) : AONE) 
+                        BCL_vsub(vdx0, vxj, vx0);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+/*
+ *                      FIXME: AVX blends need 4 bit imm ???? 
+ */
+                        BCL_imaskz_vrcp(vd0, ik0); 
+                        
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                     }
+#elif defined(AVX) // avx... makes the perf much slower!!! 
+                     for (j = i; j < i+UR*VLEN; j++) 
+                     {
+                        const int n = j-i;
+                        register VTYPE vxj;
+                        register VTYPE vyj;
+                        //unsigned int ik0, ik1, ik2, ik3; 
+                        
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+/*
+ *                FIXME: ik0 must be compile time to use with AVX  
+ */
+                  #define ND (j-i)
+                  #define AONE ((1<<VLEN)-1)  
+                  #define ik0 (( ND >= 0 && ND < VLEN ) ? \
+                              (AONE & (~(1 << (ND%VLEN)))) : AONE) 
+                        
+                        BCL_vsub(vdx0, vxj, vx0);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+/*
+ *                      FIXME: AVX blends need 4 bit imm ???? 
+ */
+                        switch(n%VLEN)
+                        {
+                           case 0:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1)); 
+                              break;
+                           case 1: 
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<1)); 
+                              break;
+                           case 2: 
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<2)); 
+                              break;
+                           case 3:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<3)); 
+                              break;
+                              // single precision 
+                           case 4:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<4)); 
+                              break;
+                           case 5:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<5)); 
+                              break;
+                           case 6:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<6)); 
+                              break;
+                           case 7:
+                              if (n >=0 && n < VLEN)
+                                 BCL_imaskz_vrcp(vd0, AONE & ~(1<<7)); 
+                              break;
+                           }
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                     }
+#else // for all other systems 
+#endif
+                  }
+/*
+ *                Upper part  
+ *
+ */ 
+                  chunksize = (M - i - UR*VLEN)/nthreads; 
+
+                  for(j = (i+UR*VLEN)+id*chunksize; j < (i+UR*VLEN)+(id+1)*chunksize; j++)
+                  {
+                     register VTYPE vxj;
+                     register VTYPE vyj;
+		  
+                     BCL_vbcast(vxj, blasX+j);
+                     BCL_vbcast(vyj, blasY+j);
+                     //dx0 = xj - x0;
+		     BCL_vsub(vdx0, vxj, vx0);
+	          
+                     // dy0 = yj - y0;
+		     BCL_vsub(vdy0, vyj, vy0);
+	             
+                     //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		     BCL_vmul(vd0, vdx0, vdx0);
+                     
+                     BCL_vmac(vd0, vdy0, vdy0);
+                     
+                     BCL_vrcp(vd0); 
+                  
+                     //tfx0 += dx0 * d0;
+                     BCL_vmac(vtfx0, vdx0, vd0);
+
+                     //tfy0 += dy0 * d0;
+                     BCL_vmac(vtfy0, vdy0, vd0);
+                  }
+/*
+ *                cleanup 
+ */
+                  #pragma omp single nowait 
+                  {
+                     for (j=(i+UR*VLEN)+nthreads*chunksize; j < M; j++)
+                     {
+                        register VTYPE vxj; 
+                        register VTYPE vyj;
+		  
+                        BCL_vbcast(vxj, blasX+j);
+                        BCL_vbcast(vyj, blasY+j);
+                        //dx0 = xj - x0;
+		        BCL_vsub(vdx0, vxj, vx0);
+	          
+                        // dy0 = yj - y0;
+		        BCL_vsub(vdy0, vyj, vy0);
+	             
+                        //d0 = 1.0 / (dx0 * dx0 + dy0 * dy0);
+		        BCL_vmul(vd0, vdx0, vdx0);
+                        
+                        BCL_vmac(vd0, vdy0, vdy0);
+                        
+                        BCL_vrcp(vd0); 
+		     
+                        //tfx0 += dx0 * d0;
+                        BCL_vmac(vtfx0, vdx0, vd0);
+
+                        //tfy0 += dy0 * d0;
+                        BCL_vmac(vtfy0, vdy0, vd0);
+                     }
+                  }
+#if 0
+/*
+ *                Reduction without synchronization  
+ */
+                  {
+                     register VTYPE tv; 
+                     double *ptr = sumX + id*UR*VLEN;
+                     
+                     //fx1 += tfx1; 
+                     BCL_vldu(tv, ptr);
+                     BCL_vadd(vtfx0, vtfx0, tv);
+                     BCL_vstu(ptr, vtfx0);
+                     
+                     //fy1 += tfy1; 
+                     ptr = (double*) sumY + id*UR*VLEN;
+                     BCL_vldu(tv, ptr);
+                     BCL_vadd(vtfy0, vtfy0, tv);
+                     BCL_vstu(ptr, vtfy0);
+                  }
+#else
+/*
+ *                Reduction 
+ */
+                  #pragma omp critical
+                  {
+                     //fx0 += tfx0; 
+                     BCL_vadd(vfx0, vfx0, vtfx0);
+                     //fy0 += tfy0; 
+                     BCL_vadd(vfy0, vfy0, vtfy0);
+                  }
+#endif
+               }
+/*
+ *             Out of parallel region 
+ */
+               BCL_vstu(pb_X+ind, vfx0); 
+               BCL_vstu(pb_Y+ind, vfy0); 
+            }
+
+            // connected nodes 
+	    for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i += 1)
+            {   
+               int ind = i-b*BATCHSIZE;
+               VALUETYPE pbX=0.0, pbY=0.0;
+               VALUETYPE dist, distX, distY;
+               for(INDEXTYPE j = graph.rowptr[i]; j < graph.rowptr[i+1]; j += 1)
+               {
+                  int v = graph.colids[j];
+                  distX = blasX[v] - blasX[i];
+                  distY = blasY[v] - blasY[i];
+                  dist = (distX * distX + distY * distY);
+                  dist = sqrt(dist) + 1.0 / dist;
+                  pbX += distX * dist;
+                  pbY += distY * dist;
+               }
+               pb_X[ind] = pbX - pb_X[ind];
+               pb_Y[ind] = pbY - pb_Y[ind];
+            }
+	    /*printf("After:\n");
+            for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i++)
+            {
+               printf("%d = %lf,", i, pb_X[i-b*BATCHSIZE]);
+            }
+	    */
+	    for(INDEXTYPE i = b * BATCHSIZE; i < (b + 1) * BATCHSIZE; i += 1)
+            {
+               int ind = i-b*BATCHSIZE;
+               VALUETYPE d;
+	       d = (pb_X[ind] * pb_X[ind] + pb_Y[ind] * pb_Y[ind]);
+	       ENERGY += d ;
+	       
+               d = STEP / sqrt(d);
+	       blasX[i] += pb_X[ind] * d;
+               blasY[i] += pb_Y[ind] * d;
+	       
+               pb_X[ind] = 0;
+	       pb_Y[ind] = 0;    
+            }
+         }
+/*
+ *    cleanup 
+ */
+			INDEXTYPE cleanup = (graph.rows/BATCHSIZE) * BATCHSIZE;
+			#pragma omp parallel for schedule(dynamic) 
+			for(INDEXTYPE i = cleanup; i < graph.rows; i += 1){
+                                INDEXTYPE ind = i- cleanup;
+                                VALUETYPE fx = 0, fy = 0, distX, distY, dist, dist2;
+                                for(INDEXTYPE j = graph.rowptr[i]; j < graph.rowptr[i+1]; j += 1){
+                                        int v = graph.colids[j];
+                                        distX = blasX[v] - blasX[i];
+                                        distY = blasY[v] - blasY[i];
+                                        dist = (distX * distX + distY * distY);
+                                        dist = sqrt(dist) + 1.0 / dist;
+                                        pb_X[ind] += distX * dist;
+                                        pb_Y[ind] += distY * dist;
+                                }
+                                for(INDEXTYPE j = 0; j < i; j += 1){
+                                        distX = blasX[j] - blasX[i];
+                                        distY = blasY[j] - blasY[i];
+                                        dist2 = 1.0 / (distX * distX + distY * distY);
+                                        fx += distX * dist2;
+                                        fy += distY * dist2;
+                                }
+                                for(INDEXTYPE j = i+1; j < graph.rows; j += 1){
+                                        distX = blasX[j] - blasX[i];
+                                        distY = blasY[j] - blasY[i];
+                                        dist2 = 1.0 / (distX * distX + distY * distY);
+                                        fx += distX * dist2;
+                                        fy += distY * dist2;
+                                }
+                                pb_X[ind] = pb_X[ind] - fx;
+                                pb_Y[ind] = pb_Y[ind] - fy;
+                        }	
+			for(INDEXTYPE i = cleanup; i < graph.rows; i += 1){
+                                int ind = i-cleanup;
+                                double dist = (pb_X[ind]*pb_X[ind] + pb_Y[ind]*pb_Y[ind]);
+                                ENERGY += dist;
+				dist = STEP / sqrt(dist);
+				blasX[i] += pb_X[ind] * dist;
+                                blasY[i] += pb_Y[ind] * dist;
+				pb_X[ind] = pb_Y[ind] = 0;
+                        }
+                        STEP = STEP * 0.999;
+                        LOOP++;
+                }
+                end = omp_get_wtime();
+         #if NO_FWRITE == 0
+                cout << "Efficientunroll Minibatch Size:" << BATCHSIZE  << endl;
+                cout << "Efficientunroll Minbatch Energy:" << ENERGY << endl;
+                cout << "Efficientunroll Minibatch Parallel Wall time required:" << end - start << endl;
+                writeToFileEFF("EFFUR4-VEC-NOSYNC"+ to_string(BATCHSIZE)+"PARAOUT" + to_string(LOOP));
          #endif
                 result.push_back(ENERGY);
                 result.push_back(end - start);
