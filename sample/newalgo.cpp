@@ -31,7 +31,7 @@
                            // N=128: spup = 1.56
                            // N=64: spup = 1.85
    
-   //#define MDIM_VEC_UR4 1  // N=256: spup = 1.35 FIXED 
+  // #define MDIM_VEC_UR4 1  // N=256: spup = 1.35 FIXED 
                            // N=128: spup = 1.42  
                            // N=64: spup = 1.53 sec=0.099  
                            // N=32: spup = 2.03  --- with 256 Eff, spup = 1.26   
@@ -40,7 +40,7 @@
                                   // N = 128: spup = 2.07   FIXED  
                                   // N = 64: spup = 2.27  
    
-   //#define MDIM_VEC_UR4_NOSYNC 1  // N=256: spup = 1.8 ... FIXED 
+   #define MDIM_VEC_UR4_NOSYNC 1  // N=256: spup = 1.8 ... FIXED 
                                   // N=128: spup = 1.9
                                   // N=64: spup = 2.25 -- with 256 eff, spup = 1.85  
                                   // N=32: spup = 2.91 -- with 256 eff, spup = 1.89 
@@ -49,7 +49,7 @@
                                        //
    //#define MDIM_VEC_UR2_NOSYNC 1  // N=256:  
    //#define MDIM_VEC_UR1_NOSYNC 1  // AVX: N=64, spup = 0.9 :  
-   #define MDIM_VEC_UR1 1  // AVX: N=64, spup = 0.87  :  
+   //#define MDIM_VEC_UR1 1  // AVX: N=64, spup = 0.87  :  
 
 	newalgo::newalgo(CSR<INDEXTYPE, VALUETYPE> &A_csr, string input, string outputd, int init, double weight, double th, string ifile){
 		graph.make_empty();
@@ -6550,7 +6550,7 @@
 /*
  *             starting of parallel region 
  */
-               #pragma omp parallel shared(sumX, sumY)
+               #pragma omp parallel proc_bind(close)  shared(sumX, sumY)
                {
                   int id, nthreads; 
                   int chunksize;

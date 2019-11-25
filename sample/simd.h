@@ -219,7 +219,9 @@
    #define BLC_vdiv(d_, s1_, s2_) d_ =  vec_div(s1_, s2_) 
    #define BLC_vmac(d_, s1_, s2_) d_ =  vec_madd(s1_, s2_, d_) 
    #define BCL_vrcp(d_) d_ = vec_recip(d_); // reciprocal 
-   //#define BCL_imaskz_vrcp(d_, ik_) // no support for imask 
+   //#define BCL_imaskz_vrcp(d_, ik_) // no support for imask
+   //NOTE: need to verify, substracting same number in IEEE754 results zero????
+   //we don't have imask version for vec_sel ???? 
    //#define BCL_maskz_vrcp(d_) \
    {\
       VTYPE vz_; \
